@@ -1,7 +1,9 @@
 use crate::components::{AllPass, CombFilter};
 use crate::{AudioNode, PCM, Stereo};
 
-/// Implementation of the "freeverb" algorithm
+/// Implementation of the "freeverb" algorithm.
+///
+/// Each of the internal combs and allpass filters are limited to a maximum of `N` samples.
 ///
 /// Freeverb is a Schroeder reverberator and was written by "Jezar at Dreampoint". It uses eight parallel Schroeder-Moorer
 /// filtered-feedback comb-filters followed by four allpass filters in series for the left and
@@ -151,6 +153,12 @@ impl<S: PCM, const N: usize> Freeverb<S, N> {
         }
     }
 
+    /// Default const constructor, i.e. can be created at compile-time.   
+    /// ```
+    /// use dspkit::effects::Freeverb;;
+    ///
+    /// static FREEVERB: Freeverb<f32, 1024> = Freeverb::const_default();
+    /// ```
     pub const fn const_default() -> Self {
         let parameters = FreeverbParameters::const_default();
         Self {
