@@ -1,5 +1,5 @@
-use crate::components::{AllPass, CombFilter};
-use crate::{AudioNode, PCM, Stereo};
+use crate::components::{CombFilter, SchroederAllPass};
+use crate::{PCM, Stereo};
 
 /// Implementation of the "freeverb" algorithm.
 ///
@@ -13,13 +13,12 @@ pub struct Freeverb<S: PCM, const N: usize> {
     derived: FreeverbDerivedVars,
     combs_l: [CombFilter<S, N>; tuning::NUM_COMBS],
     combs_r: [CombFilter<S, N>; tuning::NUM_COMBS],
-    allpass_l: [AllPass<S, N>; tuning::NUM_ALLPASS],
-    allpass_r: [AllPass<S, N>; tuning::NUM_ALLPASS],
+    allpass_l: [SchroederAllPass<S, N>; tuning::NUM_ALLPASS],
+    allpass_r: [SchroederAllPass<S, N>; tuning::NUM_ALLPASS],
 }
 
 /// Mode for the reverb effect.
 #[derive(Clone, Copy)]
-#[repr(C)]
 pub enum FreeverbMode {
     /// Normal mode for a live reverb effect.
     Active,
@@ -27,51 +26,17 @@ pub enum FreeverbMode {
     /// until unfrozen.
     Frozen,
 }
-mod tuning {
-    // Freeverb model tuning from: https://github.com/sinshu/freeverb/blob/main/Components/tuning.h
 
-    // Fixed gain to scale the input to the comb filters when not in freeze mode
-    // This also helps keep the output of the reverb from exceeding unity gain
-    pub const FIXED_GAIN: f32 = 0.03;
-
-    // 0.0 = small room, to 1.0 = large room; maps to 0.7 to 0.98
-    pub const SCALE_ROOM: f32 = 0.28;
-    pub const OFFSET_ROOM: f32 = 0.7;
-    pub const INITIAL_ROOM: f32 = 0.5;
-
-    // 0.0 = no damping, 1.0 = full damping; maps to 0.0 to 0.4
-    pub const INITIAL_DAMP: f32 = 0.5;
-    pub const SCALE_DAMP: f32 = 0.4;
-
-    pub const INITIAL_WET: f32 = 0.5; // 0.0 = no wet, 1.0 = full wet
-    pub const INITIAL_DRY: f32 = 0.0; // 0.0 = no dry, 1.0 = full dry
-    pub const INITIAL_WIDTH: f32 = 0.0; // 0.0 = mono, 1.0 = stereo
-
-    pub const ALLPASS_FEEDBACK: f32 = 0.5; // feedback coefficient for allpass filters
-
-    // Spread between left and right delay times for stereo effect
-    pub const STEREO_SPREAD_SEC: f32 = 0.000_521_541_9; // 23 samples (at 44.1kHz)
-
-    pub const NUM_COMBS: usize = 8;
-    pub const COMB_SECOND_TUNINGS: [f32; NUM_COMBS] = [
-        0.025_306_122, // 1116 samples at 44.1kHz
-        0.026_938_775, // 1188 samples at 44.1kHz
-        0.028_956_916, // 1277 samples at 44.1kHz
-        0.030_748_299, // 1356 samples at 44.1kHz
-        0.032_244_9,   // 1422 samples at 44.1kHz
-        0.033_809_524, // 1491 samples at 44.1kHz
-        0.035_306_122, // 1557 samples at 44.1kHz
-        0.036_666_666, // 1617 samples at 44.1kHz
-    ];
-
-    pub const NUM_ALLPASS: usize = 4;
-    pub const ALLPASS_SECOND_TUNINGS: [f32; NUM_ALLPASS] = [
-        0.012_607_709_7, // 556 samples at 44.1kHz
-        0.01,            // 441 samples at 44.1kHz
-        0.007_732_426_3, // 341 samples at 44.1kHz
-        0.005_102_040_8, // 225 samples at 44.1kHz
-    ];
+impl From<u8> for FreeverbMode {
+    fn from(value: u8) -> Self {
+        match value % 2 {
+            0 => Self::Active,
+            1 => Self::Frozen,
+            _ => unreachable!(),
+        }
+    }
 }
+
 /// Parameters to the freeverb effect.
 #[derive(Clone, Copy)]
 pub struct FreeverbParameters {
@@ -99,43 +64,52 @@ struct FreeverbDerivedVars {
     damp: f32,
 }
 
-impl<Storage: PCM, const N: usize> AudioNode<Stereo<f32>, Stereo<f32>> for Freeverb<Storage, N> {
-    fn tick(&mut self, input: &Stereo<f32>) -> Stereo<f32> {
-        let in_l = input[0];
-        let in_r = input[1];
-
-        let mut out_l = f32::PCM_EQUILIBRIUM;
-        let mut out_r = f32::PCM_EQUILIBRIUM;
-
-        let mono_input = self.derived.gain * 0.5 * (in_l + in_r);
-
-        for comb in self.combs_l.iter_mut() {
-            out_l += comb.tick(&mono_input);
+impl<S: PCM, const N: usize> Freeverb<S, N> {
+    /// Construct a freeverb effect with the given initial parameters. All float parameters are
+    /// checked to be within the range 0.0..=1.0.
+    //
+    /// ```
+    /// use dspkit::effects::{Freeverb, FreeverbParameters, FreeverbMode};
+    /// let freeverb = Freeverb::<f32, 1024>::new(FreeverbParameters {
+    ///     mode: FreeverbMode::Active,
+    ///     room_size: 0.5,
+    ///     damp: 0.5,
+    ///     wet: 0.7,
+    ///     dry: 0.3,
+    ///     width: 0.4
+    /// });
+    /// ```
+    pub fn new(parameters: FreeverbParameters) -> Self {
+        Self {
+            parameters,
+            derived: compute_derived_parameters(parameters),
+            combs_l: [CombFilter::const_default(); tuning::NUM_COMBS],
+            combs_r: [CombFilter::const_default(); tuning::NUM_COMBS],
+            allpass_l: [SchroederAllPass::const_default(); tuning::NUM_ALLPASS],
+            allpass_r: [SchroederAllPass::const_default(); tuning::NUM_ALLPASS],
         }
+    }
 
-        for comb in self.combs_r.iter_mut() {
-            out_r += comb.tick(&mono_input);
+    /// Default const constructor, i.e. can be created at compile-time.   
+    /// ```
+    /// use dspkit::effects::Freeverb;;
+    ///
+    /// static FREEVERB: Freeverb<f32, 1024> = Freeverb::const_default();
+    /// ```
+    pub const fn const_default() -> Self {
+        let parameters = FreeverbParameters::const_default();
+        Self {
+            parameters,
+            derived: compute_derived_parameters(parameters),
+            combs_l: [CombFilter::const_default(); tuning::NUM_COMBS],
+            combs_r: [CombFilter::const_default(); tuning::NUM_COMBS],
+            allpass_l: [SchroederAllPass::const_default(); tuning::NUM_ALLPASS],
+            allpass_r: [SchroederAllPass::const_default(); tuning::NUM_ALLPASS],
         }
-
-        for allpass in self.allpass_l.iter_mut() {
-            out_l = allpass.tick(&mono_input);
-        }
-
-        for allpass in self.allpass_r.iter_mut() {
-            out_r = allpass.tick(&mono_input);
-        }
-
-        let wet_l = out_l * self.derived.wet_l + out_r * self.derived.wet_r;
-        let wet_r = out_l * self.derived.wet_r + out_r * self.derived.wet_l;
-
-        out_l = wet_l + in_l * self.derived.dry;
-        out_r = wet_r + in_r * self.derived.dry;
-
-        [out_l, out_r]
     }
 
     #[inline]
-    fn prepare(&mut self, sample_rate: usize) {
+    pub fn prepare(&mut self, sample_rate: usize) {
         self.derived = compute_derived_parameters(self.parameters);
 
         for (comb, delay_seconds) in self.combs_l.iter_mut().zip(tuning::COMB_SECOND_TUNINGS) {
@@ -168,50 +142,39 @@ impl<Storage: PCM, const N: usize> AudioNode<Stereo<f32>, Stereo<f32>> for Freev
             allpass.set_delay(delay_seconds + tuning::STEREO_SPREAD_SEC, sample_rate);
         }
     }
-}
 
-impl<S: PCM, const N: usize> Freeverb<S, N> {
-    /// Construct a freeverb effect with the given initial parameters. All float parameters are
-    /// checked to be within the range 0.0..=1.0.
-    //
-    /// ```
-    /// use dspkit::effects::{Freeverb, FreeverbParameters, FreeverbMode};
-    /// let freeverb = Freeverb::<f32, 1024>::new(FreeverbParameters {
-    ///     mode: FreeverbMode::Active,
-    ///     room_size: 0.5,
-    ///     damp: 0.5,
-    ///     wet: 0.7,
-    ///     dry: 0.3,
-    ///     width: 0.4
-    /// });
-    /// ```
-    pub fn new(parameters: FreeverbParameters) -> Self {
-        Self {
-            parameters,
-            derived: compute_derived_parameters(parameters),
-            combs_l: [CombFilter::const_default(); tuning::NUM_COMBS],
-            combs_r: [CombFilter::const_default(); tuning::NUM_COMBS],
-            allpass_l: [AllPass::const_default(); tuning::NUM_ALLPASS],
-            allpass_r: [AllPass::const_default(); tuning::NUM_ALLPASS],
-        }
-    }
+    pub fn tick(&mut self, input: &Stereo<f32>) -> Stereo<f32> {
+        let in_l = input[0];
+        let in_r = input[1];
 
-    /// Default const constructor, i.e. can be created at compile-time.   
-    /// ```
-    /// use dspkit::effects::Freeverb;;
-    ///
-    /// static FREEVERB: Freeverb<f32, 1024> = Freeverb::const_default();
-    /// ```
-    pub const fn const_default() -> Self {
-        let parameters = FreeverbParameters::const_default();
-        Self {
-            parameters,
-            derived: compute_derived_parameters(parameters),
-            combs_l: [CombFilter::const_default(); tuning::NUM_COMBS],
-            combs_r: [CombFilter::const_default(); tuning::NUM_COMBS],
-            allpass_l: [AllPass::const_default(); tuning::NUM_ALLPASS],
-            allpass_r: [AllPass::const_default(); tuning::NUM_ALLPASS],
+        let mut out_l = f32::PCM_EQUILIBRIUM;
+        let mut out_r = f32::PCM_EQUILIBRIUM;
+
+        let mono_input = self.derived.gain * 0.5 * (in_l + in_r);
+
+        for comb in self.combs_l.iter_mut() {
+            out_l += comb.tick(&mono_input);
         }
+
+        for comb in self.combs_r.iter_mut() {
+            out_r += comb.tick(&mono_input);
+        }
+
+        for allpass in self.allpass_l.iter_mut() {
+            out_l = allpass.tick(&mono_input);
+        }
+
+        for allpass in self.allpass_r.iter_mut() {
+            out_r = allpass.tick(&mono_input);
+        }
+
+        let wet_l = out_l * self.derived.wet_l + out_r * self.derived.wet_r;
+        let wet_r = out_l * self.derived.wet_r + out_r * self.derived.wet_l;
+
+        out_l = wet_l + in_l * self.derived.dry;
+        out_r = wet_r + in_r * self.derived.dry;
+
+        [out_l, out_r]
     }
 
     #[inline]
@@ -307,4 +270,50 @@ const fn compute_derived_parameters(parameters: FreeverbParameters) -> FreeverbD
             damp: 0.0,
         },
     }
+}
+
+mod tuning {
+    // Freeverb model tuning from: https://github.com/sinshu/freeverb/blob/main/Components/tuning.h
+
+    // Fixed gain to scale the input to the comb filters when not in freeze mode
+    // This also helps keep the output of the reverb from exceeding unity gain
+    pub const FIXED_GAIN: f32 = 0.03;
+
+    // 0.0 = small room, to 1.0 = large room; maps to 0.7 to 0.98
+    pub const SCALE_ROOM: f32 = 0.28;
+    pub const OFFSET_ROOM: f32 = 0.7;
+    pub const INITIAL_ROOM: f32 = 0.5;
+
+    // 0.0 = no damping, 1.0 = full damping; maps to 0.0 to 0.4
+    pub const INITIAL_DAMP: f32 = 0.5;
+    pub const SCALE_DAMP: f32 = 0.4;
+
+    pub const INITIAL_WET: f32 = 0.5; // 0.0 = no wet, 1.0 = full wet
+    pub const INITIAL_DRY: f32 = 0.0; // 0.0 = no dry, 1.0 = full dry
+    pub const INITIAL_WIDTH: f32 = 0.0; // 0.0 = mono, 1.0 = stereo
+
+    pub const ALLPASS_FEEDBACK: f32 = 0.5; // feedback coefficient for allpass filters
+
+    // Spread between left and right delay times for stereo effect
+    pub const STEREO_SPREAD_SEC: f32 = 0.000_521_541_9; // 23 samples (at 44.1kHz)
+
+    pub const NUM_COMBS: usize = 8;
+    pub const COMB_SECOND_TUNINGS: [f32; NUM_COMBS] = [
+        0.025_306_122, // 1116 samples at 44.1kHz
+        0.026_938_775, // 1188 samples at 44.1kHz
+        0.028_956_916, // 1277 samples at 44.1kHz
+        0.030_748_299, // 1356 samples at 44.1kHz
+        0.032_244_9,   // 1422 samples at 44.1kHz
+        0.033_809_524, // 1491 samples at 44.1kHz
+        0.035_306_122, // 1557 samples at 44.1kHz
+        0.036_666_666, // 1617 samples at 44.1kHz
+    ];
+
+    pub const NUM_ALLPASS: usize = 4;
+    pub const ALLPASS_SECOND_TUNINGS: [f32; NUM_ALLPASS] = [
+        0.012_607_709_7, // 556 samples at 44.1kHz
+        0.01,            // 441 samples at 44.1kHz
+        0.007_732_426_3, // 341 samples at 44.1kHz
+        0.005_102_040_8, // 225 samples at 44.1kHz
+    ];
 }

@@ -1,5 +1,5 @@
+use crate::PCM;
 use crate::components::DelayLine;
-use crate::{AudioNode, PCM};
 
 /// Comb filter with a maximum of `N` samples in the delay line.
 #[derive(Debug, Copy, Clone)]
@@ -7,21 +7,6 @@ pub struct CombFilter<S: PCM, const N: usize> {
     mix: f32,
     feedback: f32,
     line: DelayLine<S, N>,
-}
-
-impl<Storage: PCM, const N: usize> AudioNode<f32, f32> for CombFilter<Storage, N> {
-    #[inline(always)]
-    fn tick(&mut self, input: &f32) -> f32 {
-        // compute new wet signal
-        let delay_line: f32 = self.line.peek().into();
-        let wet = input + delay_line * self.feedback;
-
-        // update delay line
-        self.line.write(Storage::from(wet));
-        self.line.advance();
-
-        wet * self.mix + (1.0 - self.mix) * input
-    }
 }
 
 impl<S: PCM, const N: usize> CombFilter<S, N> {
@@ -37,6 +22,19 @@ impl<S: PCM, const N: usize> CombFilter<S, N> {
             feedback,
             line: DelayLine::const_default(),
         }
+    }
+
+    #[inline(always)]
+    pub fn tick(&mut self, input: &f32) -> f32 {
+        // compute new wet signal
+        let delay_line: f32 = self.line.peek().into();
+        let wet = input + delay_line * self.feedback;
+
+        // update delay line
+        self.line.write(S::from(wet));
+        self.line.advance();
+
+        wet * self.mix + (1.0 - self.mix) * input
     }
 
     /// Default const constructor, i.e. can be created at compile-time.   

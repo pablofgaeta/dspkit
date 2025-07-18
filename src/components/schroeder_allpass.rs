@@ -1,29 +1,14 @@
+use crate::PCM;
 use crate::components::DelayLine;
-use crate::{AudioNode, PCM};
 
 /// All-pass filter with a maximum of `N` samples in the delay line.
 #[derive(Debug, Copy, Clone)]
-pub struct AllPass<S: PCM, const N: usize> {
+pub struct SchroederAllPass<S: PCM, const N: usize> {
     feedback: f32,
     line: DelayLine<S, N>,
 }
 
-impl<Storage: PCM, const N: usize> AudioNode<f32, f32> for AllPass<Storage, N> {
-    #[inline(always)]
-    fn tick(&mut self, input: &f32) -> f32 {
-        let feedback = self.feedback;
-        let delay_line: f32 = self.line.peek().into();
-
-        // update delay line
-        let delay_input = input + delay_line * feedback;
-        self.line.write(Storage::from(delay_input));
-        self.line.advance();
-
-        delay_line - delay_input * feedback
-    }
-}
-
-impl<S: PCM, const N: usize> AllPass<S, N> {
+impl<S: PCM, const N: usize> SchroederAllPass<S, N> {
     /// Construct a new all-pass filter with the given feedback coefficient.
     ///
     /// Asserts: `0 <= feedback <= 1`
@@ -34,6 +19,19 @@ impl<S: PCM, const N: usize> AllPass<S, N> {
             feedback,
             line: DelayLine::const_default(),
         }
+    }
+
+    #[inline(always)]
+    pub fn tick(&mut self, input: &f32) -> f32 {
+        let feedback = self.feedback;
+        let delay_line: f32 = self.line.peek().into();
+
+        // update delay line
+        let delay_input = input + delay_line * feedback;
+        self.line.write(S::from(delay_input));
+        self.line.advance();
+
+        delay_line - delay_input * feedback
     }
 
     /// Default const constructor, i.e. can be created at compile-time.   
@@ -66,7 +64,7 @@ impl<S: PCM, const N: usize> AllPass<S, N> {
     }
 }
 
-impl<S: PCM, const N: usize> Default for AllPass<S, N> {
+impl<S: PCM, const N: usize> Default for SchroederAllPass<S, N> {
     fn default() -> Self {
         Self::const_default()
     }
