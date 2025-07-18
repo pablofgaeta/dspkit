@@ -36,9 +36,9 @@ impl<S: PCM, const N: usize> SchroederAllPass<S, N> {
 
     /// Default const constructor, i.e. can be created at compile-time.   
     /// ```
-    /// use dspkit::components::AllPass;
+    /// use dspkit::components::SchroederAllPass;
     ///
-    /// static LINE: AllPass<f32, 1024> = AllPass::const_default();
+    /// static LINE: SchroederAllPass<f32, 1024> = SchroederAllPass::const_default();
     /// ```
     pub const fn const_default() -> Self {
         Self {
