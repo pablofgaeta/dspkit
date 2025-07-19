@@ -19,6 +19,7 @@ pub struct Freeverb<S: PCM, const N: usize> {
 
 /// Mode for the reverb effect.
 #[derive(Clone, Copy)]
+#[repr(u16)]
 pub enum FreeverbMode {
     /// Normal mode for a live reverb effect.
     Active,
@@ -27,8 +28,8 @@ pub enum FreeverbMode {
     Frozen,
 }
 
-impl From<u8> for FreeverbMode {
-    fn from(value: u8) -> Self {
+impl From<u16> for FreeverbMode {
+    fn from(value: u16) -> Self {
         match value % 2 {
             0 => Self::Active,
             1 => Self::Frozen,
