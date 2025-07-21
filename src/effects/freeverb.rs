@@ -168,11 +168,11 @@ impl<S: PCM, const N: usize> Freeverb<S, N> {
         }
 
         for allpass in self.allpass_l.iter_mut() {
-            out_l = allpass.tick(&mono_input);
+            out_l = allpass.tick(&out_l);
         }
 
         for allpass in self.allpass_r.iter_mut() {
-            out_r = allpass.tick(&mono_input);
+            out_r = allpass.tick(&out_r);
         }
 
         let wet_l = out_l * self.derived.wet_l + out_r * self.derived.wet_r;
