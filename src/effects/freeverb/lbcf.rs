@@ -31,11 +31,6 @@ impl<S: PCM, const N: usize> Comb<S, N> {
     }
 
     /// Default const constructor, i.e. can be created at compile-time.   
-    /// ```
-    /// use dspkit::components::LBCF;
-    ///
-    /// static LINE: LBCF<f32, 1024> = LBCF::const_default();
-    /// ```
     pub const fn const_default() -> Self {
         Comb {
             mix: 0.0,

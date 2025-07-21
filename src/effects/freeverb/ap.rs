@@ -14,11 +14,6 @@ pub struct AllPass<S: PCM, const N: usize> {
 
 impl<S: PCM, const N: usize> AllPass<S, N> {
     /// Default const constructor, i.e. can be created at compile-time.
-    /// ```
-    /// use dspkit::effects::freeverb::AllPass;
-    ///
-    /// static LINE: AllPass<f32, 1024> = AllPass::const_default();
-    /// ```
     pub const fn const_default() -> Self {
         Self {
             line: DelayLine::const_default(),
