@@ -1,52 +1,46 @@
 use crate::PCM;
 use crate::components::DelayLine;
 
-/// Comb filter with a maximum of `N` samples in the delay line.
+/// Lowpass feedback comb filter with a maximum of `N` samples in the delay line.
+///
+/// The delay line is lowpass-filtered and summed with the input signal.
+/// The low-pass filtering is a unity-gain one-pole low-pass.
+/// A complete analysis can be found [here](https://www.dsprelated.com/freebooks/pasp/Freeverb.html)
 #[derive(Debug, Copy, Clone)]
-pub struct CombFilter<S: PCM, const N: usize> {
+pub struct Comb<S: PCM, const N: usize> {
     mix: f32,
     feedback: f32,
+    lp_signal: S,
     line: DelayLine<S, N>,
 }
 
-impl<S: PCM, const N: usize> CombFilter<S, N> {
-    /// Construct a comb filter with the specified feedback coefficient and mix for the wet signal.
-    ///
-    /// Asserts: `0 <= mix <= 1` and `0 <= feedback <= 1`.
-    pub fn new(mix: f32, feedback: f32) -> Self {
-        assert!((0.0..=1.0).contains(&mix));
-        assert!((0.0..=1.0).contains(&feedback));
-
-        CombFilter {
-            mix,
-            feedback,
-            line: DelayLine::const_default(),
-        }
-    }
-
+impl<S: PCM, const N: usize> Comb<S, N> {
     #[inline(always)]
     pub fn tick(&mut self, input: &f32) -> f32 {
-        // compute new wet signal
-        let delay_line: f32 = self.line.peek().into();
-        let wet = input + delay_line * self.feedback;
+        let output: f32 = self.line.peek().into();
 
-        // update delay line
-        self.line.write(S::from(wet));
+        // Update using unity-gain one-pole lowpass filter on output signal.
+        let lp_signal = self.mix * self.lp_signal.into() + (1.0 - self.mix) * output;
+        self.lp_signal = S::from(lp_signal);
+
+        // Update delay line
+        self.line.write(S::from(input + self.feedback * lp_signal));
         self.line.advance();
 
-        wet * self.mix + (1.0 - self.mix) * input
+        output
     }
 
     /// Default const constructor, i.e. can be created at compile-time.   
     /// ```
-    /// use dspkit::components::CombFilter;
+    /// use dspkit::components::LBCF;
     ///
-    /// static LINE: CombFilter<f32, 1024> = CombFilter::const_default();
+    /// static LINE: LBCF<f32, 1024> = LBCF::const_default();
     /// ```
     pub const fn const_default() -> Self {
-        CombFilter {
+        Comb {
             mix: 0.0,
             feedback: 0.0,
+            lp_signal: S::PCM_EQUILIBRIUM,
             line: DelayLine::const_default(),
         }
     }
@@ -63,7 +57,6 @@ impl<S: PCM, const N: usize> CombFilter<S, N> {
         self.feedback = feedback;
     }
 
-    #[inline(always)]
     pub fn set_delay(&mut self, seconds: f32, sample_rate: usize) {
         self.line.set_length(seconds, sample_rate);
     }

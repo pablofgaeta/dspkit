@@ -82,8 +82,8 @@ impl<S: PCM, const N: usize> DelayLine<S, N> {
         // }
 
         self.size = new_length;
-        if self.size > self.index {
-            self.index = self.size;
+        if self.index >= self.size {
+            self.index = 0;
         }
     }
 
